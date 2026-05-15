@@ -1,7 +1,7 @@
 {
-  "name": "ai-agent-backend",
+  "name": "codelm-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "CodeLM — AI-powered code quality and security reviewer",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -22,7 +22,13 @@
   },
   "homepage": "https://github.com/react-sweat/ai-agent-backend#readme",
   "dependencies": {
-    "express": "^5.2.1"
+    "@types/cors": "^2.8.19",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.1.0",
+    "openai": "^6.37.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

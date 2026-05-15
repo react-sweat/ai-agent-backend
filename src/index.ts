@@ -1,13 +1,12 @@
-import express, { Request, Response } from 'express';
+import 'dotenv/config';
+import express from 'express';
+import agentRouter from './agent/agent.router';
 
 const app = express();
-const PORT = process.env.PORT ?? 3000;
+const PORT = process.env['PORT'] ?? 3000;
 
 app.use(express.json());
-
-app.get('/', (_req: Request, res: Response) => {
-  res.json({ message: 'AI Agent Backend is running' });
-});
+app.use('/agent', agentRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

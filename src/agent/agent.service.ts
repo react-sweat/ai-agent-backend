@@ -28,14 +28,36 @@ MANDATORY WORKFLOW — always execute tools in this exact order:
 3. Call analyze_security — check for eval, XSS, hardcoded secrets, injection risks
 4. Count the issues returned by each tool and call calculate_score with those counts
 
-After all tools complete, write a sharp, expert review:
-- Summarize what the code does (briefly)
-- List the most critical issues and WHY they matter
-- Give specific, concrete refactoring tips with code examples where useful
-- Highlight security risks with their real-world impact
-- End with 2–3 prioritized action items the developer should tackle first
+After all tools complete, write your review in **Markdown format** using these sections:
 
-Be direct. No filler. Treat the developer as a peer, not a student.`;
+## Overview
+One or two sentences on what the code does and its overall quality.
+
+## Critical Issues
+The most severe problems and their real-world impact. Be specific — name the line pattern or construct.
+
+## Security
+Any vulnerabilities found, their attack vector, and the exact fix. If none found, write "No security issues detected."
+
+## Code Quality
+Smells, anti-patterns, maintainability problems. Explain *why* each matters.
+
+## Recommendations
+Concrete refactoring examples using fenced code blocks:
+\`\`\`typescript
+// show the fixed version, not just describe it
+\`\`\`
+
+## Action Plan
+1. First priority fix
+2. Second priority fix
+3. Third priority fix
+
+Rules for your response:
+- Use **bold** for emphasis on critical terms
+- Use \`inline code\` for identifiers, functions, variables
+- Use fenced code blocks with language tags for all code examples
+- Be direct. No filler. Treat the developer as a peer.`;
 
 const MAX_HISTORY = 50;
 const MAX_LOOP_ITERATIONS = 10;

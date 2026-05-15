@@ -27,21 +27,62 @@ interface ToolFindings {
 }
 
 function computeScore(
-  syntaxCount: number,
-  smellCount: number,
-  securityCount: number,
+  syntaxIssues: string[],
+  smells: string[],
+  vulnerabilities: string[],
 ): { score: number; grade: string } {
-  const syntaxDeduction   = Math.min(syntaxCount   * 12, 30);
-  const smellDeduction    = Math.min(smellCount    *  5, 20);
-  const securityDeduction = Math.min(securityCount * 18, 50);
+  const syntaxDeduction = Math.min(
+    syntaxIssues.reduce((total, issue) => {
+      const lower = issue.toLowerCase();
+      if (lower.includes('unmatched') || lower.includes('unclosed')) return total + 18;
+      return total + 12;
+    }, 0),
+    45,
+  );
+
+  const smellDeduction = Math.min(
+    smells.reduce((total, smell) => {
+      const lower = smell.toLowerCase();
+      if (
+        lower.includes('non-virtual destructor') ||
+        lower.includes('deadlock') ||
+        lower.includes('reinterpret_cast') ||
+        lower.includes('recursive template') ||
+        lower.includes('base-pointer allocation')
+      ) {
+        return total + 16;
+      }
+      if (lower.includes('raw heap allocation')) return total + 10;
+      return total + 8;
+    }, 0),
+    45,
+  );
+
+  const securityDeduction = Math.min(
+    vulnerabilities.reduce((total, vulnerability) => {
+      const lower = vulnerability.toLowerCase();
+      if (
+        lower.includes('invalid free') ||
+        lower.includes('heap corruption') ||
+        lower.includes('undefined behavior') ||
+        lower.includes('deadlock risk') ||
+        lower.includes('strict aliasing') ||
+        lower.includes('virtual destructor')
+      ) {
+        return total + 32;
+      }
+      return total + 22;
+    }, 0),
+    80,
+  );
 
   const score = Math.max(0, Math.round(100 - syntaxDeduction - smellDeduction - securityDeduction));
 
   const grade =
-    score >= 90 ? 'A' :
-    score >= 75 ? 'B' :
-    score >= 60 ? 'C' :
-    score >= 45 ? 'D' : 'F';
+    score >= 95 ? 'A' :
+    score >= 85 ? 'B' :
+    score >= 70 ? 'C' :
+    score >= 55 ? 'D' : 'F';
 
   return { score, grade };
 }
@@ -137,7 +178,7 @@ export class AgentService {
   async analyze(code: string, language: string): Promise<AgentResult> {
     const { syntaxIssues, smells, vulnerabilities } = collectFindings(code, language);
     const allIssues = [...syntaxIssues, ...smells, ...vulnerabilities];
-    const { score, grade } = computeScore(syntaxIssues.length, smells.length, vulnerabilities.length);
+    const { score, grade } = computeScore(syntaxIssues, smells, vulnerabilities);
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: SYSTEM_PROMPT },

@@ -1,6 +1,5 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
-import { codeAnalyzerTools } from './tools/code-analyzer.tools';
 import { executeToolCall } from './tools/tool-executor';
 
 export interface AgentResult {
@@ -8,6 +7,9 @@ export interface AgentResult {
   grade: string;
   issues: string[];
   suggestion: string;
+  syntaxCount: number;
+  smellCount: number;
+  securityCount: number;
 }
 
 interface AnalysisRecord {
@@ -18,49 +20,98 @@ interface AnalysisRecord {
   issueCount: number;
 }
 
-const SYSTEM_PROMPT = `You are CodeLM — a ruthlessly honest AI code reviewer built for professional programmers.
+interface ToolFindings {
+  syntaxIssues: string[];
+  smells: string[];
+  vulnerabilities: string[];
+}
 
-Your job: analyze code for quality, security vulnerabilities, and bad practices, then give concrete, actionable feedback.
+function computeScore(
+  syntaxCount: number,
+  smellCount: number,
+  securityCount: number,
+): { score: number; grade: string } {
+  const syntaxDeduction   = Math.min(syntaxCount   * 12, 30);
+  const smellDeduction    = Math.min(smellCount    *  5, 20);
+  const securityDeduction = Math.min(securityCount * 18, 50);
 
-MANDATORY WORKFLOW — always execute tools in this exact order:
-1. Call analyze_syntax — detect bracket mismatches and structural errors
-2. Call detect_smells — find anti-patterns, magic numbers, console.log, long functions
-3. Call analyze_security — check for eval, XSS, hardcoded secrets, injection risks
-4. Count the issues returned by each tool and call calculate_score with those counts
+  const score = Math.max(0, Math.round(100 - syntaxDeduction - smellDeduction - securityDeduction));
 
-After all tools complete, write your review in **Markdown format** using these sections:
+  const grade =
+    score >= 90 ? 'A' :
+    score >= 75 ? 'B' :
+    score >= 60 ? 'C' :
+    score >= 45 ? 'D' : 'F';
+
+  return { score, grade };
+}
+
+const SYSTEM_PROMPT = `You are CodeLM — a senior code reviewer for professional developers.
+
+LANGUAGE CHECK (always first):
+Inspect the submitted code. If it is clearly not written in the declared language, start your response with:
+## ⚠️ Language Mismatch
+Name the actual language, explain the specific indicators (syntax, keywords, idioms), then continue with the full analysis.
+
+TOOL SEQUENCE — run all three in this exact order, no exceptions:
+1. analyze_syntax   → bracket balance, structural errors, double semicolons
+2. detect_smells    → console statements, TODO comments, magic numbers, long functions, deep nesting, any type
+3. analyze_security → eval, innerHTML XSS, hardcoded secrets, SQL injection, prototype pollution, command injection
+
+SCORING NOTE: The numerical score and grade are calculated automatically from your tool results on the server. Do NOT write any score, number, or grade in your response — the UI displays them separately.
+
+After all three tools complete, write a focused Markdown report using exactly these sections:
 
 ## Overview
-One or two sentences on what the code does and its overall quality.
+Two sentences max. What the code does and a direct verdict on its overall quality.
 
 ## Critical Issues
-The most severe problems and their real-world impact. Be specific — name the line pattern or construct.
+The highest-impact problems. Quote the exact construct, explain the real-world consequence, give the fix.
 
 ## Security
-Any vulnerabilities found, their attack vector, and the exact fix. If none found, write "No security issues detected."
+Each vulnerability found, its attack vector, and the exact remediation. If clean: "No security issues detected."
 
 ## Code Quality
-Smells, anti-patterns, maintainability problems. Explain *why* each matters.
+Anti-patterns and smells. Explain *why* each one hurts the codebase — not just that it exists.
 
 ## Recommendations
-Concrete refactoring examples using fenced code blocks:
+Show the corrected code in fenced blocks. Do not describe the fix — demonstrate it:
 \`\`\`typescript
-// show the fixed version, not just describe it
+// before → after
 \`\`\`
 
 ## Action Plan
-1. First priority fix
-2. Second priority fix
-3. Third priority fix
+Numbered steps ordered by impact. Specific enough to act on immediately.
 
-Rules for your response:
-- Use **bold** for emphasis on critical terms
-- Use \`inline code\` for identifiers, functions, variables
-- Use fenced code blocks with language tags for all code examples
-- Be direct. No filler. Treat the developer as a peer.`;
+Style rules:
+- **Bold** for critical terms and identifiers
+- \`inline code\` for all function names, variables, and types
+- Fenced code blocks with a language tag on every example
+- No filler sentences. Write for a senior engineer.`;
 
 const MAX_HISTORY = 50;
-const MAX_LOOP_ITERATIONS = 10;
+
+function extractStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function collectFindings(code: string, language: string): ToolFindings {
+  const syntaxRaw = JSON.parse(
+    executeToolCall('analyze_syntax', { code, language }),
+  ) as Record<string, unknown>;
+  const smellsRaw = JSON.parse(
+    executeToolCall('detect_smells', { code }),
+  ) as Record<string, unknown>;
+  const securityRaw = JSON.parse(
+    executeToolCall('analyze_security', { code }),
+  ) as Record<string, unknown>;
+
+  return {
+    syntaxIssues: extractStringArray(syntaxRaw.issues),
+    smells: extractStringArray(smellsRaw.smells),
+    vulnerabilities: extractStringArray(securityRaw.vulnerabilities),
+  };
+}
 
 export class AgentService {
   private readonly client: OpenAI;
@@ -83,85 +134,64 @@ export class AgentService {
     };
   }
 
-  async analyze(code: string): Promise<AgentResult> {
+  async analyze(code: string, language: string): Promise<AgentResult> {
+    const { syntaxIssues, smells, vulnerabilities } = collectFindings(code, language);
+    const allIssues = [...syntaxIssues, ...smells, ...vulnerabilities];
+    const { score, grade } = computeScore(syntaxIssues.length, smells.length, vulnerabilities.length);
+
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: `Analyze this code:\n\n\`\`\`\n${code}\n\`\`\`` },
+      {
+        role: 'user',
+        content: `Declared language: **${language}**
+
+Tool findings already collected on the server. Base your review on these exact results:
+
+Syntax issues (${syntaxIssues.length}):
+${syntaxIssues.length > 0 ? syntaxIssues.map(issue => `- ${issue}`).join('\n') : '- None'}
+
+Code smells (${smells.length}):
+${smells.length > 0 ? smells.map(smell => `- ${smell}`).join('\n') : '- None'}
+
+Security issues (${vulnerabilities.length}):
+${vulnerabilities.length > 0 ? vulnerabilities.map(issue => `- ${issue}`).join('\n') : '- None'}
+
+Analyze this code:
+
+\`\`\`${language}
+${code}
+\`\`\``,
+      },
     ];
 
-    const collectedIssues: string[] = [];
-    let finalScore = 100;
-    let finalGrade = 'A';
     let suggestion = '';
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      max_completion_tokens: 2048,
+      messages,
+    });
 
-    for (let i = 0; i < MAX_LOOP_ITERATIONS; i++) {
-      const response = await this.client.chat.completions.create({
-        model: this.model,
-        max_completion_tokens: 2048,
-        tools: codeAnalyzerTools,
-        tool_choice: 'auto',
-        messages,
-      });
+    suggestion = response.choices[0]?.message.content ?? '';
 
-      const choice = response.choices[0];
-      if (!choice) break;
-
-      if (choice.finish_reason === 'stop') {
-        suggestion = choice.message.content ?? '';
-        break;
-      }
-
-      if (choice.finish_reason === 'tool_calls') {
-        // Append assistant message (carries the tool_calls array)
-        messages.push(choice.message);
-
-        for (const tc of choice.message.tool_calls ?? []) {
-          if (tc.type !== 'function') continue;
-
-          let input: Record<string, unknown> = {};
-          try {
-            input = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-          } catch {
-            // Malformed JSON from model — skip
-          }
-
-          const rawResult = executeToolCall(tc.function.name, input);
-
-          // Harvest issues and final score/grade from each tool result
-          try {
-            const parsed = JSON.parse(rawResult) as Record<string, unknown>;
-            if (Array.isArray(parsed.issues)) collectedIssues.push(...(parsed.issues as string[]));
-            if (Array.isArray(parsed.smells)) collectedIssues.push(...(parsed.smells as string[]));
-            if (Array.isArray(parsed.vulnerabilities)) collectedIssues.push(...(parsed.vulnerabilities as string[]));
-            if (typeof parsed.score === 'number') finalScore = parsed.score;
-            if (typeof parsed.grade === 'string') finalGrade = parsed.grade;
-          } catch {
-            // Non-JSON tool result — ignore
-          }
-
-          console.log(`[CodeLM] Tool called: ${tc.function.name}`);
-
-          messages.push({
-            role: 'tool',
-            tool_call_id: tc.id,
-            content: rawResult,
-          });
-        }
-      }
-    }
-
-    // Persist metadata only — never store the code itself
     const record: AnalysisRecord = {
       id: randomUUID(),
       timestamp: new Date().toISOString(),
-      score: finalScore,
-      grade: finalGrade,
-      issueCount: collectedIssues.length,
+      score,
+      grade,
+      issueCount: allIssues.length,
     };
     this.history.unshift(record);
     if (this.history.length > MAX_HISTORY) this.history.splice(MAX_HISTORY);
 
-    return { score: finalScore, grade: finalGrade, issues: collectedIssues, suggestion };
+    return {
+      score,
+      grade,
+      issues: allIssues,
+      suggestion,
+      syntaxCount: syntaxIssues.length,
+      smellCount: smells.length,
+      securityCount: vulnerabilities.length,
+    };
   }
 
   executeTool(name: string, input: Record<string, unknown>): unknown {

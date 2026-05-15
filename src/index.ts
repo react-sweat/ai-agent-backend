@@ -8,11 +8,8 @@ import agentRouter from './agent/agent.router';
 const app = express();
 const PORT = Number(process.env.PORT ?? 3000);
 
-// ── Security headers ─────────────────────────────────────────────────────────
 app.use(helmet());
 
-// ── CORS ─────────────────────────────────────────────────────────────────────
-// Restrict to the frontend origin; set ALLOWED_ORIGIN in .env for production
 const allowedOrigin = process.env.ALLOWED_ORIGIN ?? 'http://localhost:5173';
 app.use(
   cors({
@@ -22,11 +19,8 @@ app.use(
   }),
 );
 
-// ── Body parsing (hard cap at 100 KB) ────────────────────────────────────────
 app.use(express.json({ limit: '100kb' }));
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
-// General: 60 req/min per IP for all /agent routes
 const generalLimiter = rateLimit({
   windowMs: 60_000,
   limit: 60,
@@ -35,7 +29,6 @@ const generalLimiter = rateLimit({
   message: { error: 'Too many requests — please slow down.' },
 });
 
-// Stricter: 10 req/min per IP for /agent/analyze (each call hits Claude API)
 const analyzeLimiter = rateLimit({
   windowMs: 60_000,
   limit: 10,
@@ -47,7 +40,6 @@ const analyzeLimiter = rateLimit({
 app.use('/agent', generalLimiter);
 app.use('/agent/analyze', analyzeLimiter);
 
-// ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/agent', agentRouter);
 
 app.get('/', (_req: Request, res: Response) => {
@@ -55,14 +47,13 @@ app.get('/', (_req: Request, res: Response) => {
     name: 'CodeLM API',
     endpoints: {
       'POST /agent/ping': 'health check',
-      'POST /agent/analyze': 'analyze code — body: { code: string }',
+      'POST /agent/analyze': 'analyze code — body: { code: string, language?: string }',
       'POST /agent/tool/:name': 'run a single tool directly',
       'GET  /agent/history': 'recent analysis metadata',
     },
   });
 });
 
-// ── Global error handler ──────────────────────────────────────────────────────
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error('[CodeLM] Unhandled error:', err);
 

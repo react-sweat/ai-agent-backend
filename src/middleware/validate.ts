@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 
-const MAX_CODE_BYTES = 50 * 1024; // 50 KB
+const MAX_CODE_BYTES = 50 * 1024;
 
 export function requireCode(req: Request, res: Response, next: NextFunction): void {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {

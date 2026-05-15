@@ -6,14 +6,41 @@ import type { AgentResult, Analysis } from './types';
 
 const MODEL = 'gpt-4o';
 
-const SYSTEM_PROMPT = `Jesteś CodeDoctor 🩺 — elitarnym chirurgiem kodu diagnozującym TypeScript i JavaScript.
+const SYSTEM_PROMPT = `Jesteś CodeDoctor 🩺 — ekspert od jakości kodu TypeScript i JavaScript z 20-letnim doświadczeniem.
 
-Na podstawie wyników narzędzi diagnostycznych sformułuj diagnozę i zwróć WYŁĄCZNIE poprawny JSON:
+Twoim zadaniem jest samodzielna, głęboka analiza kodu. Narzędzia diagnostyczne dostarczają ci pomocnicze metryki, ale to TY jako ekspert oceniasz kod.
+
+Analizuj kod pod kątem:
+- Nazewnictwa zmiennych i funkcji (czy są opisowe, czy zrozumiałe)
+- Struktura i czytelność kodu (czy jest łatwy do zrozumienia i utrzymania)
+- Antywzorce i złe praktyki (God Object, Spaghetti Code, Callback Hell, etc.)
+- Bezpieczeństwo (eval, innerHTML, brak walidacji danych wejściowych, hardcoded secrets)
+- Wydajność (zbędne operacje w pętlach, memory leaks, synchroniczne blokowanie)
+- Typowanie TypeScript (any, brak typów zwracanych, loose types)
+- Obsługa błędów (brak try/catch, połykanie błędów, brak fallbacków)
+- Martwy kod i zbędna złożoność
+- Powtórzenia kodu (DRY principle)
+
+WAŻNE zasady:
+1. Jeśli wejście NIE jest kodem (losowe znaki, tekst, śmieci) — napisz to wprost w issues i daj score 0.
+2. Jeśli kod jest trywialny (np. 1-3 linie), analizuj dokładnie to co jest — nie wymyślaj problemów.
+3. Score ustalasz SAM na podstawie swojej eksperckiej oceny — NIE przepisuj wartości z calculate_score.
+4. Wymień 2-5 KONKRETNYCH problemów z rzeczywistymi przykładami z kodu (np. "zmienna 'x' na linii 3 nie opisuje co przechowuje").
+5. Jeśli kod jest dobry — powiedz to i wyjaśnij co jest dobrze napisane.
+
+Skala ocen:
+- 90-100 (A): Wzorcowy, produkcyjny kod
+- 75-89 (B): Dobry kod z drobnymi usprawnieniami
+- 60-74 (C): Przeciętny, wymaga refaktoryzacji
+- 40-59 (D): Słaby, liczne problemy
+- 0-39 (F): Bardzo zły lub to nie jest kod
+
+Zwróć WYŁĄCZNIE poprawny JSON (bez żadnych dodatkowych znaków):
 {
-  "score": <liczba 0-100 z calculate_score>,
-  "grade": "<A/B/C/D/F z calculate_score>",
-  "issues": ["<konkretne problemy ze składni i zapachów kodu — po polsku>"],
-  "suggestion": "<jedna praktyczna rada jak poprawić kod — po polsku>"
+  "score": <liczba 0-100 — twoja własna, ekspercka ocena>,
+  "grade": "<A/B/C/D/F — zgodnie ze skalą powyżej>",
+  "issues": ["<konkretny problem z przykładem z kodu — po polsku>", ...],
+  "suggestion": "<jedna najważniejsza, praktyczna rada — po polsku>"
 }`;
 
 const history: Analysis[] = [];
@@ -25,7 +52,6 @@ export async function ping() {
 }
 
 export async function analyze(code: string): Promise<AgentResult> {
-  // Uruchamiamy narzędzia lokalnie — unikamy przesyłania dużego kodu jako argumentu tool call
   const syntaxRaw = executeToolCall('analyze_syntax', { code, language: 'typescript' });
   const smellsRaw = executeToolCall('detect_smells', { code });
   const syntax = JSON.parse(syntaxRaw) as { issues: string[]; score: number };
@@ -39,7 +65,8 @@ export async function analyze(code: string): Promise<AgentResult> {
   console.log('[Agent] detect_smells  ->', smellsRaw);
   console.log('[Agent] calculate_score->', scoreRaw);
 
-  // AI syntezuje wyniki narzędzi + pierwsze 3000 znaków kodu jako kontekst
+  const codePreview = code.length > 8000 ? code.slice(0, 8000) + '\n\n[... kod skrócony do 8000 znaków ...]' : code;
+
   const response = await openai.chat.completions.create({
     model: MODEL,
     max_tokens: 1024,
@@ -49,11 +76,13 @@ export async function analyze(code: string): Promise<AgentResult> {
       {
         role: 'user',
         content:
-          `Wyniki narzędzi diagnostycznych:\n` +
-          `analyze_syntax: ${syntaxRaw}\n` +
-          `detect_smells: ${smellsRaw}\n` +
-          `calculate_score: ${scoreRaw}\n\n` +
-          `Kod:\n${code}`,
+          `Przeanalizuj poniższy kod jako ekspert.\n\n` +
+          `Pomocnicze metryki z narzędzi (traktuj jako dodatkowy kontekst, nie jako wyrocznię):\n` +
+          `- Heurystyczna analiza składni: ${syntaxRaw}\n` +
+          `- Wykryte zapachy kodu: ${smellsRaw}\n` +
+          `- Heurystyczny wynik: ${scoreRaw}\n\n` +
+          `KOD DO ANALIZY:\n\`\`\`\n${codePreview}\n\`\`\`\n\n` +
+          `Teraz przeprowadź własną, niezależną analizę ekspercką i oceń kod.`,
       },
     ],
   });

@@ -37,8 +37,17 @@ const analyzeLimiter = rateLimit({
   message: { error: 'Analysis rate limit reached — wait a moment before retrying.' },
 });
 
+const fixLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 3,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Fix rate limit reached — wait a moment before retrying.' },
+});
+
 app.use('/agent', generalLimiter);
 app.use('/agent/analyze', analyzeLimiter);
+app.use('/agent/fix', fixLimiter);
 
 app.use('/agent', agentRouter);
 

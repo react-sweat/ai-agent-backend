@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { AgentService } from './agent.service';
 import { requireCode, requireBody } from '../middleware/validate';
+import { runFixGraph } from './fix-graph';
 
 const router = Router();
 const agent = new AgentService();
@@ -30,6 +31,12 @@ router.post('/tool/:name', requireBody, async (req: Request, res: Response) => {
 
   const result = agent.executeTool(name, req.body as Record<string, unknown>);
   res.json({ result });
+});
+
+router.post('/fix', requireCode, async (req: Request, res: Response) => {
+  const { code, language } = req.body as { code: string; language?: string };
+  const result = await runFixGraph(code, language ?? 'unknown', agent.client, agent.model);
+  res.json(result);
 });
 
 router.get('/history', (_req: Request, res: Response) => {

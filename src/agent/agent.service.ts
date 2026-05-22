@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
 import { executeToolCall } from './tools/tool-executor';
+import { getLangfuse } from '../observability/langfuse-client';
 
 export interface AgentResult {
   score: number;
@@ -20,13 +21,13 @@ interface AnalysisRecord {
   issueCount: number;
 }
 
-interface ToolFindings {
+export interface ToolFindings {
   syntaxIssues: string[];
   smells: string[];
   vulnerabilities: string[];
 }
 
-function computeScore(
+export function computeScore(
   syntaxIssues: string[],
   smells: string[],
   vulnerabilities: string[],
@@ -136,7 +137,7 @@ function extractStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
-function collectFindings(code: string, language: string): ToolFindings {
+export function collectFindings(code: string, language: string): ToolFindings {
   const syntaxRaw = JSON.parse(
     executeToolCall('analyze_syntax', { code, language }),
   ) as Record<string, unknown>;
@@ -155,8 +156,8 @@ function collectFindings(code: string, language: string): ToolFindings {
 }
 
 export class AgentService {
-  private readonly client: OpenAI;
-  private readonly model: string;
+  readonly client: OpenAI;
+  readonly model: string;
   private readonly history: AnalysisRecord[] = [];
 
   constructor() {
@@ -176,15 +177,32 @@ export class AgentService {
   }
 
   async analyze(code: string, language: string): Promise<AgentResult> {
-    const { syntaxIssues, smells, vulnerabilities } = collectFindings(code, language);
-    const allIssues = [...syntaxIssues, ...smells, ...vulnerabilities];
-    const { score, grade } = computeScore(syntaxIssues, smells, vulnerabilities);
+    const langfuse = getLangfuse();
+    const trace = langfuse?.trace({
+      name: 'code-analysis',
+      input: { codeLength: code.length, language },
+      metadata: { model: this.model },
+    });
 
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: `Declared language: **${language}**
+    try {
+      const toolsSpan = trace?.span({ name: 'collect-findings', input: { language } });
+      const { syntaxIssues, smells, vulnerabilities } = collectFindings(code, language);
+      toolsSpan?.end({
+        output: {
+          syntaxCount: syntaxIssues.length,
+          smellCount: smells.length,
+          securityCount: vulnerabilities.length,
+        },
+      });
+
+      const allIssues = [...syntaxIssues, ...smells, ...vulnerabilities];
+      const { score, grade } = computeScore(syntaxIssues, smells, vulnerabilities);
+
+      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: `Declared language: **${language}**
 
 Tool findings already collected on the server. Base your review on these exact results:
 
@@ -202,37 +220,57 @@ Analyze this code:
 \`\`\`${language}
 ${code}
 \`\`\``,
-      },
-    ];
+        },
+      ];
 
-    let suggestion = '';
-    const response = await this.client.chat.completions.create({
-      model: this.model,
-      max_completion_tokens: 2048,
-      messages,
-    });
+      const generation = trace?.generation({
+        name: 'code-review',
+        model: this.model,
+        input: messages,
+      });
 
-    suggestion = response.choices[0]?.message.content ?? '';
+      let suggestion = '';
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        max_completion_tokens: 2048,
+        messages,
+      });
 
-    const record: AnalysisRecord = {
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      score,
-      grade,
-      issueCount: allIssues.length,
-    };
-    this.history.unshift(record);
-    if (this.history.length > MAX_HISTORY) this.history.splice(MAX_HISTORY);
+      suggestion = response.choices[0]?.message.content ?? '';
 
-    return {
-      score,
-      grade,
-      issues: allIssues,
-      suggestion,
-      syntaxCount: syntaxIssues.length,
-      smellCount: smells.length,
-      securityCount: vulnerabilities.length,
-    };
+      generation?.end({
+        output: suggestion,
+        usage: {
+          input: response.usage?.prompt_tokens,
+          output: response.usage?.completion_tokens,
+          total: response.usage?.total_tokens,
+        },
+      });
+
+      const record: AnalysisRecord = {
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+        score,
+        grade,
+        issueCount: allIssues.length,
+      };
+      this.history.unshift(record);
+      if (this.history.length > MAX_HISTORY) this.history.splice(MAX_HISTORY);
+
+      trace?.update({ output: { score, grade, issueCount: allIssues.length } });
+
+      return {
+        score,
+        grade,
+        issues: allIssues,
+        suggestion,
+        syntaxCount: syntaxIssues.length,
+        smellCount: smells.length,
+        securityCount: vulnerabilities.length,
+      };
+    } finally {
+      await langfuse?.flushAsync();
+    }
   }
 
   executeTool(name: string, input: Record<string, unknown>): unknown {

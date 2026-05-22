@@ -3,9 +3,12 @@ import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
-import agentRouter from './agent/agent.router';
+import agentRouter   from './agent/agent.router';
+import authRouter    from './auth/auth.router';
+import historyRouter from './history/history.router';
+import { initDB } from './db';
 
-const app = express();
+const app  = express();
 const PORT = Number(process.env.PORT ?? 3000);
 
 app.use(helmet());
@@ -15,43 +18,49 @@ app.use(
   cors({
     origin: allowedOrigin,
     methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   }),
 );
 
 app.use(express.json({ limit: '100kb' }));
 
 const generalLimiter = rateLimit({
-  windowMs: 60_000,
-  limit: 60,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
+  windowMs: 60_000, limit: 60,
+  standardHeaders: 'draft-7', legacyHeaders: false,
   message: { error: 'Too many requests — please slow down.' },
 });
-
 const analyzeLimiter = rateLimit({
-  windowMs: 60_000,
-  limit: 10,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
+  windowMs: 60_000, limit: 10,
+  standardHeaders: 'draft-7', legacyHeaders: false,
   message: { error: 'Analysis rate limit reached — wait a moment before retrying.' },
+});
+const authLimiter = rateLimit({
+  windowMs: 60_000, limit: 20,
+  standardHeaders: 'draft-7', legacyHeaders: false,
+  message: { error: 'Too many auth attempts — please wait a minute.' },
 });
 
 app.use('/agent', generalLimiter);
 app.use('/agent/analyze', analyzeLimiter);
 app.use('/agent/analyze-and-rewrite', analyzeLimiter);
+app.use('/auth', authLimiter);
 
-app.use('/agent', agentRouter);
+app.use('/agent',   agentRouter);
+app.use('/auth',    authRouter);
+app.use('/history', historyRouter);
 
 app.get('/', (_req: Request, res: Response) => {
   res.json({
     name: 'CodeLM API',
     endpoints: {
-      'POST /agent/ping': 'health check',
-      'POST /agent/analyze': 'analyze code — body: { code: string, language?: string }',
-      'POST /agent/analyze-and-rewrite': 'analyze + rewrite + verify — body: { code: string, language?: string }',
-      'POST /agent/tool/:name': 'run a single tool directly',
-      'GET  /agent/history': 'recent analysis metadata',
+      'POST /auth/register':              'create account',
+      'POST /auth/login':                 'login, returns JWT',
+      'GET  /auth/me':                    'current user (Bearer token)',
+      'GET  /history':                    'analysis history (Bearer token)',
+      'POST /agent/ping':                 'health check',
+      'POST /agent/analyze':              'analyze code',
+      'POST /agent/analyze-and-rewrite':  'analyze + rewrite + verify',
+      'POST /agent/tool/:name':           'run a single tool directly',
     },
   });
 });
@@ -73,8 +82,16 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: message });
 });
 
-app.listen(PORT, () => {
-  console.log(`[CodeLM] Running on http://localhost:${PORT}`);
-});
+// Boot: connect to DB first, then start HTTP server
+initDB()
+  .then(() =>
+    app.listen(PORT, () =>
+      console.log(`[CodeLM] Running on http://localhost:${PORT}`),
+    ),
+  )
+  .catch(err => {
+    console.error('[DB] Failed to initialise — check DB_* vars in .env:', err);
+    process.exit(1);
+  });
 
 export default app;

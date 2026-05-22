@@ -28,6 +28,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.1.0",
+    "langfuse": "^3.38.20",
     "openai": "^6.37.0"
   },
   "devDependencies": {

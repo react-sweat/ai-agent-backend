@@ -1,6 +1,8 @@
 import OpenAI from 'openai';
+import { observeOpenAI } from 'langfuse';
 import { randomUUID } from 'crypto';
 import { executeToolCall } from './tools/tool-executor';
+import { langfuse, getSystemPrompt } from '../langfuse';
 
 export interface AgentResult {
   score: number;
@@ -87,48 +89,6 @@ function computeScore(
   return { score, grade };
 }
 
-const SYSTEM_PROMPT = `You are CodeLM — a senior code reviewer for professional developers.
-
-LANGUAGE CHECK (always first):
-Inspect the submitted code. If it is clearly not written in the declared language, start your response with:
-## ⚠️ Language Mismatch
-Name the actual language, explain the specific indicators (syntax, keywords, idioms), then continue with the full analysis.
-
-TOOL SEQUENCE — run all three in this exact order, no exceptions:
-1. analyze_syntax   → bracket balance, structural errors, double semicolons
-2. detect_smells    → console statements, TODO comments, magic numbers, long functions, deep nesting, any type
-3. analyze_security → eval, innerHTML XSS, hardcoded secrets, SQL injection, prototype pollution, command injection
-
-SCORING NOTE: The numerical score and grade are calculated automatically from your tool results on the server. Do NOT write any score, number, or grade in your response — the UI displays them separately.
-
-After all three tools complete, write a focused Markdown report using exactly these sections:
-
-## Overview
-Two sentences max. What the code does and a direct verdict on its overall quality.
-
-## Critical Issues
-The highest-impact problems. Quote the exact construct, explain the real-world consequence, give the fix.
-
-## Security
-Each vulnerability found, its attack vector, and the exact remediation. If clean: "No security issues detected."
-
-## Code Quality
-Anti-patterns and smells. Explain *why* each one hurts the codebase — not just that it exists.
-
-## Recommendations
-Show the corrected code in fenced blocks. Do not describe the fix — demonstrate it:
-\`\`\`typescript
-// before → after
-\`\`\`
-
-## Action Plan
-Numbered steps ordered by impact. Specific enough to act on immediately.
-
-Style rules:
-- **Bold** for critical terms and identifiers
-- \`inline code\` for all function names, variables, and types
-- Fenced code blocks with a language tag on every example
-- No filler sentences. Write for a senior engineer.`;
 
 const MAX_HISTORY = 50;
 
@@ -180,8 +140,10 @@ export class AgentService {
     const allIssues = [...syntaxIssues, ...smells, ...vulnerabilities];
     const { score, grade } = computeScore(syntaxIssues, smells, vulnerabilities);
 
+    const { text: systemPrompt, client: promptClient } = await getSystemPrompt();
+
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       {
         role: 'user',
         content: `Declared language: **${language}**
@@ -205,14 +167,35 @@ ${code}
       },
     ];
 
-    let suggestion = '';
-    const response = await this.client.chat.completions.create({
+    const trace = langfuse?.trace({
+      name: 'code-analysis',
+      input: { language, codeLength: code.length },
+      metadata: { model: this.model },
+    });
+
+    const observedClient = trace
+      ? observeOpenAI(this.client, {
+          parent: trace,
+          generationName: 'analysis-completion',
+          ...(promptClient ? { langfusePrompt: promptClient } : {}),
+        })
+      : this.client;
+
+    const response = await observedClient.chat.completions.create({
       model: this.model,
       max_completion_tokens: 2048,
       messages,
     });
 
-    suggestion = response.choices[0]?.message.content ?? '';
+    const suggestion = response.choices[0]?.message.content ?? '';
+
+    trace?.update({
+      output: { score, grade, issueCount: allIssues.length },
+    });
+
+    if (langfuse) {
+      langfuse.flushAsync().catch(() => undefined);
+    }
 
     const record: AnalysisRecord = {
       id: randomUUID(),

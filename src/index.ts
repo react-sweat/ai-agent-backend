@@ -39,6 +39,7 @@ const analyzeLimiter = rateLimit({
 
 app.use('/agent', generalLimiter);
 app.use('/agent/analyze', analyzeLimiter);
+app.use('/agent/analyze-and-rewrite', analyzeLimiter);
 
 app.use('/agent', agentRouter);
 
@@ -48,6 +49,7 @@ app.get('/', (_req: Request, res: Response) => {
     endpoints: {
       'POST /agent/ping': 'health check',
       'POST /agent/analyze': 'analyze code — body: { code: string, language?: string }',
+      'POST /agent/analyze-and-rewrite': 'analyze + rewrite + verify — body: { code: string, language?: string }',
       'POST /agent/tool/:name': 'run a single tool directly',
       'GET  /agent/history': 'recent analysis metadata',
     },

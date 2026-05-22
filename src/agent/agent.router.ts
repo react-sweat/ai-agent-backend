@@ -18,6 +18,12 @@ router.post('/analyze', requireCode, async (req: Request, res: Response) => {
   res.json(result);
 });
 
+router.post('/analyze-and-rewrite', requireCode, async (req: Request, res: Response) => {
+  const { code, language } = req.body as { code: string; language?: string };
+  const result = await agent.analyzeAndRewrite(code, language ?? 'unknown');
+  res.json(result);
+});
+
 router.post('/tool/:name', requireBody, async (req: Request, res: Response) => {
   const name = String(req.params['name'] ?? '');
 

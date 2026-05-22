@@ -44,6 +44,13 @@ export async function initDB(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_history_user_id    ON analysis_history(user_id);
       CREATE INDEX IF NOT EXISTS idx_history_created_at ON analysis_history(created_at DESC);
+
+      -- Add columns for full issue arrays and improved breakdown (safe on re-runs)
+      ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS issues               JSONB;
+      ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS improved_issues      JSONB;
+      ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS improved_syntax_count  INTEGER;
+      ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS improved_smell_count   INTEGER;
+      ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS improved_security_count INTEGER;
     `);
     console.log('[DB] Tables ready');
   } finally {
